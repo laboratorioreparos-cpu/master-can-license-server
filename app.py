@@ -272,4 +272,4 @@ def activate(data: dict):
         "mensagem": "Licença ativada com sucesso"
     }
 
-# ajuste astivate final
+# ajuste astivate final 2
