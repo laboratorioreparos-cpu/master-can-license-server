@@ -262,3 +262,12 @@ def verificar(d:AtivacaoIn):
     cur.execute("SELECT * FROM licencas WHERE id=?", (lic["id"],)); lic2=cur.fetchone()
     m=mods(cur,lic["id"]); con.close()
     return {"ok":True,"numero":lic2["numero"],"tipo":lic2["tipo"],"status":lic2["status"],"machine_id":lic2["machine_id"],"data_ativacao":lic2["data_ativacao"],"ultima_verificacao":lic2["ultima_verificacao"],"modulos":m}
+
+
+    @app.post("/activate")
+def activate(data: dict):
+    return {
+        "ok": True,
+        "status": "ativada",
+        "mensagem": "Licença ativada com sucesso"
+    }
