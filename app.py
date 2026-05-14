@@ -243,3 +243,4 @@ def ativar_licenca(licenca_id: int):
     con.commit()
     con.close()
     return {"ok": True, "licenca_id": licenca_id, "status": "ativa"}
+
