@@ -1,246 +1,225 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import sqlite3
-import secrets
-from pathlib import Path
-from datetime import datetime
+from flask import Flask, request, jsonify
+import os
+import json
+import hashlib
+from datetime import datetime, timezone
 
-DB = Path(__file__).with_name("licencas.db")
+app = Flask(__name__)
 
-MODULOS_PADRAO = [
-    "monitor",
-    "farejador",
-    "troncos",
-    "radar",
-    "engenharia",
-    "simulador",
-    "atualizacao_online",
-]
+# Banco simples em memória/arquivo.
+# Para começar, as licenças podem ser cadastradas neste dicionário.
+# Depois podemos evoluir para banco online.
+LICENSES = {
+    # Exemplo:
+    # "CLIENTE001": {
+    #     "machine_id": "ID_DA_MAQUINA_DO_CLIENTE",
+    #     "status": "active",
+    #     "expires": "2099-12-31",
+    #     "name": "Cliente teste"
+    # }
+}
 
-app = FastAPI(title="MASTER CAN LICENSE SERVER")
-
-
-class Cliente(BaseModel):
-    nome: str
-    telefone: str = ""
-    email: str = ""
-    observacao: str = ""
+MASTER_SECRET = os.environ.get("MASTER_SECRET", "CHINA_REPAROS_MASTER_CAN_ANALYSE")
 
 
-class CriarLicenca(BaseModel):
-    cliente_nome: str
-    id_maquina: str
-    tipo: str = "vitalicia"
-    modulos: list[str] = MODULOS_PADRAO
+def gerar_assinatura(license_key: str, machine_id: str) -> str:
+    texto = f"{license_key}|{machine_id}|{MASTER_SECRET}"
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
 
 
-class Ativacao(BaseModel):
-    chave: str
-    id_maquina: str
-    versao: str = ""
-
-
-def db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    return con
-
-
-def inicializar_banco():
-    con = db()
-    cur = con.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS clientes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            telefone TEXT,
-            email TEXT,
-            observacao TEXT,
-            criado_em TEXT
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS licencas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cliente_nome TEXT NOT NULL,
-            chave TEXT UNIQUE NOT NULL,
-            id_maquina TEXT NOT NULL,
-            tipo TEXT,
-            status TEXT,
-            modulos TEXT,
-            criada_em TEXT,
-            ultima_verificacao TEXT,
-            ultima_versao TEXT
-        )
-    """)
-
-    con.commit()
-    con.close()
-
-
-inicializar_banco()
-
-
-@app.get("/")
+@app.route("/", methods=["GET"])
 def home():
-    return {
-        "ok": True,
-        "servidor": "MASTER CAN ANALYSE",
+    return jsonify({
         "status": "online",
-        "mensagem": "Servidor de licenca ativo"
-    }
+        "service": "MASTER CAN ANALYSE License Server",
+        "developer": "CHINA REPAROS AUTOMOTIVOS",
+        "time": datetime.now(timezone.utc).isoformat()
+    })
 
 
-@app.get("/status")
-def status():
-    return {
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/activate", methods=["POST"])
+def activate():
+    data = request.get_json(silent=True) or {}
+
+    license_key = str(data.get("license_key", "")).strip()
+    machine_id = str(data.get("machine_id", "")).strip()
+
+    if not license_key or not machine_id:
+        return jsonify({
+            "ok": False,
+            "message": "license_key e machine_id são obrigatórios"
+        }), 400
+
+    lic = LICENSES.get(license_key)
+
+    if not lic:
+        return jsonify({
+            "ok": False,
+            "status": "invalid",
+            "message": "Licença não encontrada"
+        }), 403
+
+    if lic.get("status") != "active":
+        return jsonify({
+            "ok": False,
+            "status": "blocked",
+            "message": "Licença bloqueada"
+        }), 403
+
+    expires = lic.get("expires", "2099-12-31")
+    try:
+        exp_date = datetime.strptime(expires, "%Y-%m-%d").date()
+        if exp_date < datetime.now().date():
+            return jsonify({
+                "ok": False,
+                "status": "expired",
+                "message": "Licença expirada"
+            }), 403
+    except Exception:
+        pass
+
+    saved_machine = str(lic.get("machine_id", "")).strip()
+
+    # Se machine_id estiver vazio, aceita a primeira ativação.
+    # Se estiver preenchido, só aceita a mesma máquina.
+    if saved_machine and saved_machine != machine_id:
+        return jsonify({
+            "ok": False,
+            "status": "machine_mismatch",
+            "message": "Licença já vinculada a outra máquina"
+        }), 403
+
+    assinatura = gerar_assinatura(license_key, machine_id)
+
+    return jsonify({
         "ok": True,
-        "status": "online",
-        "hora": datetime.now().isoformat()
-    }
+        "status": "active",
+        "message": "Licença ativada com sucesso",
+        "license_key": license_key,
+        "machine_id": machine_id,
+        "expires": expires,
+        "name": lic.get("name", ""),
+        "signature": assinatura
+    })
 
 
-@app.post("/clientes")
-def criar_cliente(c: Cliente):
-    con = db()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO clientes (nome, telefone, email, observacao, criado_em) VALUES (?, ?, ?, ?, ?)",
-        (c.nome, c.telefone, c.email, c.observacao, datetime.now().isoformat())
-    )
-    con.commit()
-    cliente_id = cur.lastrowid
-    con.close()
+@app.route("/verify", methods=["POST"])
+def verify():
+    data = request.get_json(silent=True) or {}
 
-    return {
+    license_key = str(data.get("license_key", "")).strip()
+    machine_id = str(data.get("machine_id", "")).strip()
+    signature = str(data.get("signature", "")).strip()
+
+    if not license_key or not machine_id or not signature:
+        return jsonify({
+            "ok": False,
+            "message": "license_key, machine_id e signature são obrigatórios"
+        }), 400
+
+    expected = gerar_assinatura(license_key, machine_id)
+
+    if signature != expected:
+        return jsonify({
+            "ok": False,
+            "status": "invalid_signature",
+            "message": "Assinatura inválida"
+        }), 403
+
+    return jsonify({
         "ok": True,
-        "cliente_id": cliente_id,
-        "nome": c.nome
-    }
+        "status": "valid",
+        "message": "Licença válida"
+    })
 
 
-@app.get("/clientes")
-def listar_clientes():
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT * FROM clientes ORDER BY id DESC")
-    dados = [dict(row) for row in cur.fetchall()]
-    con.close()
-    return dados
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 
-@app.post("/licencas")
-def criar_licenca(l: CriarLicenca):
-    chave = "MC-" + secrets.token_hex(12).upper()
-    modulos_txt = ",".join(l.modulos)
+# =========================================================
+# ROTAS NOVAS MASTER CAN ANALYSE
+# =========================================================
 
-    con = db()
-    cur = con.cursor()
-    cur.execute(
-        """
-        INSERT INTO licencas
-        (cliente_nome, chave, id_maquina, tipo, status, modulos, criada_em, ultima_verificacao, ultima_versao)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            l.cliente_nome,
-            chave,
-            l.id_maquina,
-            l.tipo,
-            "ativa",
-            modulos_txt,
-            datetime.now().isoformat(),
-            "",
-            ""
-        )
-    )
-    con.commit()
-    licenca_id = cur.lastrowid
-    con.close()
+@app.put("/licencas/modulos")
+def atualizar_modulos(dados: dict):
+    """
+    Atualiza módulos liberados sem gerar nova licença.
+    """
+    id_maquina = dados.get("id_maquina")
+    modulos = dados.get("modulos", [])
 
-    return {
-        "ok": True,
-        "licenca_id": licenca_id,
-        "cliente_nome": l.cliente_nome,
-        "chave": chave,
-        "id_maquina": l.id_maquina,
-        "tipo": l.tipo,
-        "status": "ativa",
-        "modulos": l.modulos
-    }
+    for lic in licencas:
+        if lic.get("id_maquina") == id_maquina:
+            lic["modulos"] = modulos
+            salvar_licencas()
+            return {
+                "ok": True,
+                "mensagem": "Módulos atualizados",
+                "modulos": modulos
+            }
+
+    raise HTTPException(status_code=404, detail="Licença não encontrada")
 
 
-@app.get("/licencas")
-def listar_licencas():
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT * FROM licencas ORDER BY id DESC")
-    dados = [dict(row) for row in cur.fetchall()]
-    con.close()
-    return dados
-
-
-@app.post("/verificar")
-def verificar(d: Ativacao):
-    con = db()
-    cur = con.cursor()
-
-    cur.execute("SELECT * FROM licencas WHERE chave = ?", (d.chave,))
-    licenca = cur.fetchone()
-
-    if not licenca:
-        con.close()
-        raise HTTPException(status_code=404, detail="Chave invalida")
-
-    if licenca["status"] != "ativa":
-        con.close()
-        raise HTTPException(status_code=403, detail=f"Licenca {licenca['status']}")
-
-    if licenca["id_maquina"] != d.id_maquina:
-        con.close()
-        raise HTTPException(status_code=403, detail="Maquina nao autorizada")
-
-    cur.execute(
-        "UPDATE licencas SET ultima_verificacao = ?, ultima_versao = ? WHERE id = ?",
-        (datetime.now().isoformat(), d.versao, licenca["id"])
-    )
-    con.commit()
-
-    cur.execute("SELECT * FROM licencas WHERE id = ?", (licenca["id"],))
-    licenca = cur.fetchone()
-    con.close()
-
-    return {
-        "ok": True,
-        "cliente_nome": licenca["cliente_nome"],
-        "chave": licenca["chave"],
-        "id_maquina": licenca["id_maquina"],
-        "tipo": licenca["tipo"],
-        "status": licenca["status"],
-        "modulos": licenca["modulos"].split(",") if licenca["modulos"] else [],
-        "ultima_verificacao": licenca["ultima_verificacao"],
-        "ultima_versao": licenca["ultima_versao"]
-    }
-
-
-@app.post("/bloquear/{licenca_id}")
+@app.put("/licencas/{licenca_id}/bloquear")
 def bloquear_licenca(licenca_id: int):
-    con = db()
-    cur = con.cursor()
-    cur.execute("UPDATE licencas SET status = ? WHERE id = ?", ("bloqueada", licenca_id))
-    con.commit()
-    con.close()
-    return {"ok": True, "licenca_id": licenca_id, "status": "bloqueada"}
+    for lic in licencas:
+        if lic.get("id") == licenca_id:
+            lic["status"] = "bloqueada"
+            salvar_licencas()
+            return {"ok": True, "status": "bloqueada"}
+
+    raise HTTPException(status_code=404, detail="Licença não encontrada")
 
 
-@app.post("/ativar/{licenca_id}")
-def ativar_licenca(licenca_id: int):
-    con = db()
-    cur = con.cursor()
-    cur.execute("UPDATE licencas SET status = ? WHERE id = ?", ("ativa", licenca_id))
-    con.commit()
-    con.close()
-    return {"ok": True, "licenca_id": licenca_id, "status": "ativa"}
+@app.put("/licencas/{licenca_id}/reativar")
+def reativar_licenca(licenca_id: int):
+    for lic in licencas:
+        if lic.get("id") == licenca_id:
+            lic["status"] = "ativa"
+            salvar_licencas()
+            return {"ok": True, "status": "ativa"}
+
+    raise HTTPException(status_code=404, detail="Licença não encontrada")
+
+
+@app.put("/licencas/{licenca_id}/editar-id")
+def editar_id_maquina(licenca_id: int, dados: dict):
+    novo_id = dados.get("novo_id")
+
+    for lic in licencas:
+        if lic.get("id") == licenca_id:
+            lic["id_maquina"] = novo_id
+            salvar_licencas()
+            return {
+                "ok": True,
+                "novo_id": novo_id
+            }
+
+    raise HTTPException(status_code=404, detail="Licença não encontrada")
+
+
+@app.delete("/licencas/{licenca_id}")
+def excluir_licenca(licenca_id: int):
+    global licencas
+
+    nova_lista = [l for l in licencas if l.get("id") != licenca_id]
+
+    if len(nova_lista) == len(licencas):
+        raise HTTPException(status_code=404, detail="Licença não encontrada")
+
+    licencas = nova_lista
+    salvar_licencas()
+
+    return {
+        "ok": True,
+        "mensagem": "Licença excluída"
+    }
 
