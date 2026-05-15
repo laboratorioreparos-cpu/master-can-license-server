@@ -1,13 +1,7 @@
 # MASTER CAN ANALYSE - License Server
 
-Servidor online simples para ativação de licença do MASTER CAN ANALYSE.
+Servidor Flask corrigido para Render.
 
-Arquivos principais:
-- app.py
-- requirements.txt
+Start Command no Render:
 
-Rotas:
-- GET /
-- GET /health
-- POST /activate
-- POST /verify
+python app.py
