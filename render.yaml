@@ -1,13 +1,11 @@
 services:
   - type: web
-    name: master-can-licencas
+    name: master-can-license-server
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: DB_PATH
-        value: /var/data/licencas.db
+    startCommand: python app.py
     disk:
-      name: master-can-db
+      name: master-can-data
       mountPath: /var/data
       sizeGB: 1
