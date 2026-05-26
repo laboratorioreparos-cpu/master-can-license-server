@@ -1,0 +1,78 @@
+// Cole este código em Extensões > Apps Script dentro da planilha CLIENTES_MASTER_CAN
+// Depois clique em Implantar > Nova implantação > App da Web
+// Executar como: Eu
+// Quem tem acesso: Qualquer pessoa
+
+const SHEET_NAME = 'Sheet1';
+
+function getSheet_() {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function readClientes_() {
+  const sh = getSheet_();
+  const values = sh.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const headers = values[0].map(h => String(h).trim().toLowerCase());
+  const out = [];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i].join('').trim() === '') continue;
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = values[i][idx]);
+    out.push(obj);
+  }
+  return out;
+}
+
+function doGet(e) {
+  return json_(readClientes_());
+}
+
+function doPost(e) {
+  const data = JSON.parse(e.postData.contents || '{}');
+  const sh = getSheet_();
+  const acao = String(data.acao || 'salvar').toLowerCase();
+  const id = String(data.id || '').trim();
+
+  if (acao === 'backup') {
+    return json_({status: 'ok', backup: readClientes_(), total: readClientes_().length});
+  }
+
+  if (!id) return json_({status: 'erro', erro: 'id obrigatorio'});
+
+  const values = sh.getDataRange().getValues();
+  let row = -1;
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0]).trim().toLowerCase() === id.toLowerCase()) {
+      row = i + 1;
+      break;
+    }
+  }
+
+  if (acao === 'excluir') {
+    if (row > 0) sh.deleteRow(row);
+    return json_({status: 'ok', acao: 'excluir', id: id});
+  }
+
+  const linha = [
+    id,
+    data.nome || '',
+    data.email || '',
+    data.telefone || '',
+    data.observacao || '',
+    data.modulos || '',
+    data.ativo === false ? 'false' : String(data.ativo || 'true')
+  ];
+
+  if (row > 0) {
+    sh.getRange(row, 1, 1, linha.length).setValues([linha]);
+  } else {
+    sh.appendRow(linha);
+  }
+
+  return json_({status: 'ok', acao: 'salvar', cliente: {id, nome: data.nome || ''}});
+}

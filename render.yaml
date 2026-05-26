@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: master-can-license-server
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SHEETS_API_URL
+        sync: false
