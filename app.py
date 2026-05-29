@@ -210,4 +210,5 @@ def admin_licenca_salvar(d: AdminSalvarIn):
     }
     salvar_store(store)
     return {"ok": True, "status": "salvo", "message": "Licença/módulos atualizados no servidor", "modulos": store["licencas"][chave_id(chave)]["modulos"]}
-limpa status lincença
+
+
