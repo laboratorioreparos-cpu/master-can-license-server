@@ -136,7 +136,7 @@ def chave_id(chave: str) -> str:
 def montar_resposta(chave: str, payload: dict, id_maquina_recebido: str = "") -> dict:
     id_chave = str(payload.get("id_maquina", "")).strip()
     if id_chave and id_maquina_recebido and id_chave != id_maquina_recebido:
-        return {"ok": False, "status": "bloqueada", "message": "Licença pertence a outra máquina", "modulos": []}
+        return {"ok": False, "": "bloqueada", "message": "Licença pertence a outra máquina", "modulos": []}
 
     store = carregar_store()
     reg = store.get("licencas", {}).get(chave_id(chave), {})
@@ -146,7 +146,7 @@ def montar_resposta(chave: str, payload: dict, id_maquina_recebido: str = "") ->
 
     return {
         "ok": True,
-        "status": "ativa",
+        "status": "ATIVADO",
         "tipo": reg.get("tipo") or payload.get("tipo", "permanente"),
         "numero": reg.get("numero") or payload.get("numero", "MCA-OFFLINE"),
         "chave": chave,
